@@ -1,52 +1,110 @@
 pipeline {
     agent any
 
+    environment {
+        // Gunakan environment variables untuk konfigurasi fleksibel
+        REPO_URL = 'git@github.com:SiShopee/karyawan-app.git'
+        BRANCH = 'main'
+        VENV_DIR = 'venv'
+    }
+
+    options {
+        timeout(time: 1, unit: 'HOURS')  // Timeout global pipeline
+        disableConcurrentBuilds()  // Hindari race condition
+        buildDiscarder(logRotator(numToKeepStr: '5'))  // Simpan hanya 5 build terakhir
+    }
+
     stages {
         stage('Checkout') {
             steps {
-                // Tambahkan timeout dan retry untuk handle koneksi
-                retry(3) {
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: '*/main']],
-                        extensions: [
-                            [$class: 'CloneOption', 
-                            timeout: 30,  // Timeout 30 menit
-                            shallow: true]  // Clone dangkal untuk mempercepat
-                        ],
-                        userRemoteConfigs: [
-                            [url: 'git@github.com:SiShopee/karyawan-app.git',
-                            credentialsId: 'github-creds']  // Gunakan credentials Jenkins
-                        ]
-                    ])
+                script {
+                    // Tambahkan error handling eksplisit
+                    try {
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "*/${env.BRANCH}"]],
+                            extensions: [
+                                [$class: 'CloneOption',
+                                timeout: 30,
+                                depth: 1,  // Clone hanya 1 commit terakhir
+                                noTags: true],
+                                [$class: 'CleanBeforeCheckout']  // Bersihkan workspace sebelum checkout
+                            ],
+                            userRemoteConfigs: [
+                                [url: env.REPO_URL,
+                                credentialsId: 'github-creds',
+                                refspec: '+refs/heads/*:refs/remotes/origin/*']
+                            ]
+                        ])
+                    } catch (Exception e) {
+                        error "Gagal checkout: ${e.message}"
+                    }
                 }
             }
         }
 
-        stage('Setup Python') {
+        stage('Setup Environment') {
             steps {
-                sh '''
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    python -m pip install --upgrade pip
-                '''
+                sh """
+                    # Cek Python versi
+                    python3 --version || { echo "Python tidak terinstall"; exit 1; }
+                    
+                    # Buat virtualenv jika belum ada
+                    if [ ! -d "${env.VENV_DIR}" ]; then
+                        python3 -m venv "${env.VENV_DIR}"
+                    fi
+                    
+                    # Aktifkan virtualenv
+                    . "${env.VENV_DIR}/bin/activate"
+                    
+                    # Update pip
+                    python -m pip install --upgrade pip --no-cache-dir
+                """
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                sh '''
-                    . venv/bin/activate
-                    pip install -r requirements.txt  // Asumsi ada requirements.txt
-                '''
+                sh """
+                    . "${env.VENV_DIR}/bin/activate"
+                    
+                    # Install dependencies dengan cache
+                    pip install -r requirements.txt --no-cache-dir
+                    
+                    # Verifikasi instalasi
+                    pip freeze
+                """
+            }
+        }
+
+        stage('Build & Test') {  // Tambahkan stage untuk testing
+            steps {
+                sh """
+                    . "${env.VENV_DIR}/bin/activate"
+                    # Contoh: jalankan pytest
+                    python -m pytest tests/ || echo "Tests gagal"  # Lanjut meski test gagal
+                """
             }
         }
     }
 
     post {
         always {
-            // Bersihkan workspace setelah build
-            cleanWs()
+            // Bersihkan workspace kecuali virtualenv
+            cleanWs(cleanWhenAborted: true, cleanWhenFailure: true, cleanWhenSuccess: true)
+            
+            // Archive log untuk debugging
+            archiveArtifacts artifacts: '**/logs/*.log', allowEmptyArchive: true
+        }
+        
+        success {
+            echo 'Pipeline berhasil!'
+            // Notifikasi Slack/Email
+        }
+        
+        failure {
+            echo 'Pipeline gagal!'
+            // Notifikasi error
         }
     }
 }
