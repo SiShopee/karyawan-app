@@ -15,7 +15,7 @@ pipeline {
                             shallow: true]  // Clone dangkal untuk mempercepat
                         ],
                         userRemoteConfigs: [
-                            [url: 'https://github.com/SiShopee/karyawan-app.git',
+                            [url: 'git@github.com:SiShopee/karyawan-app.git',
                             credentialsId: 'github-creds']  // Gunakan credentials Jenkins
                         ]
                     ])
