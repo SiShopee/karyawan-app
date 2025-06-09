@@ -1,19 +1,52 @@
 pipeline {
-        agent any
+    agent any
 
-        stages {
-            stage('Checkout') {
-                steps {
-                    git url: 'https://github.com/SiShopee/karyawan-app.git', branch: 'main'
-                 }
+    stages {
+        stage('Checkout') {
+            steps {
+                // Tambahkan timeout dan retry untuk handle koneksi
+                retry(3) {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        extensions: [
+                            [$class: 'CloneOption', 
+                            timeout: 30,  // Timeout 30 menit
+                            shallow: true]  // Clone dangkal untuk mempercepat
+                        ],
+                        userRemoteConfigs: [
+                            [url: 'https://github.com/SiShopee/karyawan-app.git',
+                            credentialsId: 'github-creds']  // Gunakan credentials Jenkins
+                        ]
+                    ])
+                }
+            }
         }
 
-	stage('Install Dependencies') {
-	    steps {
-		sh 'python3 -m venv venv'
-		sh '. venv/bin/activate && pip install --upgrade pip'
-	    }
-	}
+        stage('Setup Python') {
+            steps {
+                sh '''
+                    python3 -m venv venv
+                    . venv/bin/activate
+                    python -m pip install --upgrade pip
+                '''
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    . venv/bin/activate
+                    pip install -r requirements.txt  // Asumsi ada requirements.txt
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            // Bersihkan workspace setelah build
+            cleanWs()
+        }
     }
 }
-
