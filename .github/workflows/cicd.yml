@@ -1,0 +1,101 @@
+name: Website CI/CD Pipeline
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js (Contoh untuk website JavaScript)
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build project
+      run: npm run build
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Run unit tests
+      run: |
+        npm install
+        npm test
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results
+        path: test-results.xml
+
+  security-scan:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    # SAST: ESLint untuk JavaScript
+    - name: Run ESLint
+      run: |
+        npm install -g eslint
+        eslint src/ --format json --output-file eslint-report.json
+
+    # SAST: SonarQube Scan (Opsional)
+    - name: SonarQube Scan
+      uses: SonarSource/sonarqube-scan-action@master
+      if: ${{ false }}  # Nonaktifkan default, aktifkan jika sudah setup SonarQube
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  dast:
+    needs: security-scan
+    runs-on: ubuntu-latest
+    services:
+      website:
+        image: nginx:alpine  # Ganti dengan image website Anda
+        ports:
+          - 80:80
+    steps:
+    - name: OWASP ZAP Baseline Scan
+      uses: zaproxy/action-baseline@v0.10.0
+      with:
+        target: 'http://website:80'
+        rules_file_name: 'rules.tsv'
+        fail_action: false  # Ubah ke true untuk production
+
+  deploy-staging:
+    needs: dast
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Deploy to Staging
+      run: |
+        echo "Deploying to staging..."
+        # Contoh deploy ke Vercel/Netlify:
+        npm install -g vercel
+        vercel --prod --token ${{ secrets.VERCEL_TOKEN }}
+        
+        # Atau untuk SSH deploy:
+        # ssh user@server "cd /var/www && git pull"
+      env:
+        VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
