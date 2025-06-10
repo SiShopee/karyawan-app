@@ -1,136 +1,163 @@
-# Nama workflow untuk proyek Python/Flask
+# Nama workflow
 name: Python Flask CI/CD Pipeline
 
 # Kapan workflow ini akan berjalan
 on:
   push:
-    branches: [ "main", "develop" ] # Berjalan saat ada push ke branch main atau develop
+    branches: [ "main", "develop" ]
   pull_request:
-    branches: [ "main" ] # Berjalan saat ada pull request ke branch main
+    branches: [ "main" ]
 
 jobs:
-  # Job 1: Build & Test (sudah mencakup instalasi dependensi)
-  build_and_test:
-    name: Build & Test
+  # Job 1: Linting - Memeriksa kualitas dan gaya penulisan kode
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - name: Install Linting Dependencies
+        run: |
+          pip install flake8
+      
+      - name: Run Flake8 Linter
+        run: |
+          # Periksa kode, abaikan beberapa error umum, dan tampilkan source-nya
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Keluar dengan status non-zero jika ada error, kecuali untuk beberapa warning
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+  # Job 2: Testing - Menjalankan unit & integration test
+  test:
+    name: Run Tests
+    needs: lint # Jalankan setelah linting selesai
     runs-on: ubuntu-latest
 
-    # Menjalankan layanan database MySQL di dalam container Docker untuk pengujian
+    # Menjalankan layanan database MySQL untuk pengujian
     services:
       mysql:
-        image: mysql:5.7 # Menggunakan image Docker MySQL versi 5.7
+        image: mysql:5.7
         env:
-          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_PASSWORD }} # Gunakan secret untuk password
-          MYSQL_DATABASE: karyawan_db_test # Nama database untuk testing
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_DATABASE: karyawan_db_test
         ports:
-          - 3306:3306 # Map port agar bisa diakses di localhost (127.0.0.1) oleh runner
-        options: >- # Opsi untuk health check, menunggu sampai MySQL siap
+          - 3306:3306
+        options: >-
           --health-cmd="mysqladmin ping --silent"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
 
     steps:
-      # Langkah 1: Checkout kode dari repository
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Langkah 2: Setup lingkungan Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9' # Ganti dengan versi Python Anda
-          cache: 'pip' # Mengaktifkan cache untuk dependensi pip
+          python-version: '3.9'
+          cache: 'pip'
 
-      # Langkah 3: Instal dependensi dari requirements.txt
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
-      # Langkah 4: Menjalankan unit/integration test dengan Pytest
-      - name: Run Tests
+
+      - name: Run Pytest
         env:
-          # Variabel lingkungan ini akan digunakan oleh aplikasi Flask Anda
-          # untuk terhubung ke database MySQL yang berjalan di service container.
           FLASK_ENV: testing
           DATABASE_URL: "mysql+pymysql://root:${{ secrets.DB_PASSWORD }}@127.0.0.1:3306/karyawan_db_test"
         run: |
-          pip install pytest # Pastikan pytest ada di requirements.txt atau instal di sini
-          pytest --junitxml=test-results.xml # Menjalankan tes dan membuat laporan
+          pytest --junitxml=test-results.xml
 
-      # Langkah 5: Upload hasil tes sebagai artifact
-      # Ini menggantikan job 'test' yang terpisah sebelumnya
-      - name: Upload test results
-        if: always() # Selalu jalankan langkah ini, bahkan jika tes gagal
+      - name: Upload Test Results
+        if: always() # Selalu jalankan langkah ini untuk menyimpan laporan tes
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: test-results.xml
 
-  # Job 2: Security Scan
+  # Job 3: Security Scan (SAST)
   security-scan:
     name: Security Scan
-    needs: build_and_test # Jalankan setelah build & test berhasil
+    needs: test # Jalankan setelah testing berhasil
     runs-on: ubuntu-latest
     steps:
-      # Setup lingkungan dasar lagi untuk job ini
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
+          cache: 'pip'
+      - name: Install Dependencies
+        run: pip install -r requirements.txt # Diperlukan agar bandit bisa menganalisis konteks
 
-      # SAST: Bandit untuk Python (pengganti ESLint untuk JavaScript)
-      - name: Install and Run Bandit
+      - name: Run Bandit Scan (SAST)
         run: |
           pip install bandit
           bandit -r . -f json -o bandit-report.json
 
-      # Upload laporan Bandit sebagai artifact
-      - name: Upload Bandit report
+      - name: Upload Bandit Report
         uses: actions/upload-artifact@v4
         with:
           name: bandit-report
           path: bandit-report.json
 
-  # Job 3: Deploy ke Staging (jika security scan berhasil)
-  deploy-staging:
-    name: Deploy to Staging
-    needs: security-scan
+  # Job 4: Build Docker Image (Langkah penting sebelum DAST atau deploy berbasis Docker)
+  build-docker:
+    name: Build Docker Image
+    needs: security-scan # Jalankan setelah security scan berhasil
     runs-on: ubuntu-latest
-    environment: staging # Menggunakan environment 'staging' di GitHub
-    if: github.ref == 'refs/heads/main' # Hanya deploy jika ada push ke branch main
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # Contoh deploy menggunakan SSH dan rsync
-      # Ini adalah metode umum untuk deploy aplikasi Python/Flask
-      - name: Deploy to Staging Server
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false # Set ke 'true' jika Anda ingin mendorong ke registry seperti Docker Hub
+          tags: your-username/karyawan-app:latest # Ganti dengan username Docker Hub Anda
+
+  # Job 5: Deploy ke Staging
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build-docker # Jalankan setelah image Docker berhasil dibuat
+    runs-on: ubuntu-latest
+    environment: staging
+    if: github.ref == 'refs/heads/main' # Hanya deploy jika ada push ke branch main
+
+    steps:
+      - name: Deploy to Staging Server via SSH
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.STAGING_HOST }} # IP atau domain server staging Anda
-          username: ${{ secrets.STAGING_USERNAME }} # Username untuk SSH
-          key: ${{ secrets.STAGING_SSH_KEY }} # Kunci privat SSH
-          port: 22 # Port SSH
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USERNAME }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: 22
           script: |
-            # Pindah ke direktori aplikasi
-            cd /var/www/karyawanapp 
-            
-            # Tarik perubahan terbaru dari Git
+            echo "Starting deployment to staging..."
+            cd /var/www/karyawanapp
             git pull origin main
             
-            # (Opsional) Aktivasi virtual environment jika ada
+            # (Contoh jika menggunakan Docker Compose di server)
+            # docker-compose pull # Menarik image terbaru jika sudah di-push ke registry
+            # docker-compose up -d --force-recreate
+            
+            # (Atau jika tidak pakai Docker, restart service Gunicorn)
             # source venv/bin/activate
+            # pip install -r requirements.txt
+            # sudo systemctl restart karyawanapp
             
-            # Install/update dependensi
-            pip install -r requirements.txt
-            
-            # (Opsional) Jalankan migrasi database jika menggunakan Flask-Migrate
-            # flask db upgrade
-            
-            # Restart service aplikasi (contoh menggunakan systemd untuk Gunicorn)
-            sudo systemctl restart karyawanapp
-            echo "Deployment to staging finished!"
+            echo "Deployment finished!"
