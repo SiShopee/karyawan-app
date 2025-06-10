@@ -12,14 +12,19 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Setup Node.js (Contoh untuk website JavaScript)
+    - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
         node-version: '18'
-        cache: 'npm'
+        cache: 'npm'  # Opsional: Hapus jika tidak pakai lock file
 
     - name: Install dependencies
-      run: npm ci
+      run: |
+        if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+          npm ci
+        else
+          npm install
+        fi
 
     - name: Build project
       run: npm run build
